@@ -90,7 +90,7 @@ tools = [
 assistant = Jeeves(
     client=client,
     prime_directive="You are a helpful coding assistant.",
-    model="gpt-4",
+    model="gpt-4.1",
     tools=tools,
     on_chunk=lambda x: print(x, end="", flush=True)
 )
