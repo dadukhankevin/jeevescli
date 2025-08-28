@@ -100,39 +100,184 @@ assistant.prime_directive = "Help me write a Python script"
 assistant.respond_once()
 ```
 
-### Custom Tool Example
+## How to Create Custom Tools
 
-Create your own tools by extending the `Tool` class:
+Tools are the core extension mechanism in Jeeves. Each tool defines an XML interface that the AI can use to perform specific actions.
+
+### Tool Structure
+
+Every tool must inherit from the `Tool` base class and implement these key components:
 
 ```python
 from jeevescli.base_cli import Tool
+from typing import Dict, Any, List
+
+class MyTool(Tool):
+    # Required: XML closing tag that signals tool completion
+    stop_token: str = "</my_tool>"
+    
+    # Required: Whether this tool stops AI generation (True) or continues (False)
+    stopping: bool = True
+    
+    # Optional: Other tools this tool depends on
+    dependencies: List[Tool] = []
+    
+    @property
+    def system_description(self) -> str:
+        """XML format description shown to the AI"""
+        return """
+        <my_tool>
+            <param1>description of parameter 1</param1>
+            <param2>description of parameter 2</param2>
+        </my_tool>
+        
+        Explain what this tool does and provide examples.
+        """
+    
+    @property
+    def status_prompt(self) -> str:
+        """Optional: Current state info shown to AI (e.g., "3 files open")"""
+        return ""
+    
+    def execute(self, data: Dict[str, Any]) -> str:
+        """Process the tool call and return a result message"""
+        param1 = data.get('param1', '')
+        param2 = data.get('param2', '')
+        # Your tool logic here
+        return "Tool execution result"
+```
+
+### Tool Types
+
+**Stopping Tools** (`stopping=True`): AI waits for tool completion before continuing
+- File operations, terminal commands, calculations
+- Use when the result affects next AI response
+
+**Non-stopping Tools** (`stopping=False`): AI continues while tool runs in background  
+- Logging, notifications, state updates
+- Use for side effects that don't need immediate feedback
+
+### Example: File Search Tool
+
+```python
+import os
+import glob
+from jeevescli.base_cli import Tool
 from typing import Dict, Any
 
-class CalculatorTool(Tool):
-    stop_token: str = "</calc>"
+class FileSearchTool(Tool):
+    stop_token: str = "</search_files>"
     stopping: bool = True
     
     @property
     def system_description(self) -> str:
         return """
-        <calc>
-            <expression>mathematical expression to evaluate</expression>
-        </calc>
+        <search_files>
+            <pattern>file pattern (e.g., *.py, **/*.js, src/**)</pattern>
+            <max_results>maximum number of files to return (optional, default 10)</max_results>
+        </search_files>
         
-        Use this to perform calculations. Example: <calc><expression>2 + 2 * 3</expression></calc>
+        Search for files matching a glob pattern. Use ** for recursive search.
+        Examples:
+        - <search_files><pattern>*.py</pattern></search_files>
+        - <search_files><pattern>src/**/*.js</pattern><max_results>20</max_results></search_files>
         """
     
     def execute(self, data: Dict[str, Any]) -> str:
-        expression = data.get('expression', '')
+        pattern = data.get('pattern', '')
+        max_results = int(data.get('max_results', 10))
+        
+        if not pattern:
+            return "Error: No search pattern provided"
+        
         try:
-            result = eval(expression)  # Note: eval() is unsafe for production
-            return f"Result: {result}"
+            files = glob.glob(pattern, recursive=True)[:max_results]
+            if not files:
+                return f"No files found matching pattern: {pattern}"
+            
+            result = f"Found {len(files)} files:\n"
+            for file in files:
+                size = os.path.getsize(file) if os.path.isfile(file) else 0
+                result += f"  {file} ({size} bytes)\n"
+            
+            return result
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error searching files: {e}"
+```
 
-# Use your custom tool
-tools = [TodoTool(dependencies=[]), CalculatorTool(dependencies=[])]
-assistant = Jeeves(client, "You can help with math", tools=tools)
+### Example: Stateful Tool with Status
+
+```python
+class NotesTool(Tool):
+    stop_token: str = "</notes>"
+    stopping: bool = False  # Non-stopping tool
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.notes: List[str] = []
+    
+    @property
+    def system_description(self) -> str:
+        return """
+        <notes>
+            <add>note content to add</add>
+            <remove>note content to remove</remove>
+            <clear>true</clear>
+        </notes>
+        
+        Manage a list of notes. You can add notes, remove specific notes, or clear all notes.
+        """
+    
+    @property
+    def status_prompt(self) -> str:
+        if not self.notes:
+            return "Notes: (empty)"
+        
+        status = f"Notes ({len(self.notes)}):\n"
+        for i, note in enumerate(self.notes[-5:], 1):  # Show last 5
+            status += f"  {i}. {note}\n"
+        return status
+    
+    def execute(self, data: Dict[str, Any]) -> str:
+        add_note = data.get('add')
+        remove_note = data.get('remove')
+        clear_all = data.get('clear')
+        
+        if clear_all:
+            count = len(self.notes)
+            self.notes.clear()
+            return f"Cleared {count} notes"
+        
+        if add_note:
+            self.notes.append(add_note)
+            return f"Added note: {add_note}"
+        
+        if remove_note and remove_note in self.notes:
+            self.notes.remove(remove_note)
+            return f"Removed note: {remove_note}"
+        
+        return "No action taken"
+```
+
+### Best Practices
+
+1. **Clear XML Interface**: Make parameter names and structure intuitive
+2. **Good Examples**: Show common usage patterns in `system_description`
+3. **Error Handling**: Return helpful error messages, don't raise exceptions
+4. **State Management**: Use `status_prompt` to show current state to AI
+5. **Dependencies**: List tools that must be available for this tool to work
+6. **Performance**: Keep `execute()` fast; use background tasks for slow operations
+
+### Using Your Tools
+
+```python
+# Create tools with any initialization needed
+search_tool = FileSearchTool(dependencies=[])
+notes_tool = NotesTool(dependencies=[])
+
+# Add to assistant
+tools = [TodoTool(dependencies=[]), search_tool, notes_tool]
+assistant = Jeeves(client, "You are a helpful assistant", tools=tools)
 ```
 
 ### Key Components
